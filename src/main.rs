@@ -1,124 +1,114 @@
+mod config;
+
 use bevy::prelude::*;
-use bevy_rapier3d::prelude::*;
+use bevy_rapier2d::prelude::*;
+use rand::Rng;
+use config::camera_config::CustomCameraPlugin;
+
+#[derive(Component)]
+struct Player;
+
+pub const SCREEN_WIDTH: f32 = 1280.0;
+pub const SCREEN_HEIGHT: f32 = 800.0;
+
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins)
-        .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
-        //.add_plugins(RapierDebugRenderPlugin::default())
-        .add_systems(Startup, setup_graphics)
-        .add_systems(Startup, setup_physics)
-        .add_systems(Update, print_ball_altitude)
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                resolution: (SCREEN_WIDTH as u32, SCREEN_HEIGHT as u32).into(),
+                title: "Development".into(),
+                ..default()
+            }),
+            ..default()
+        }))
+        .add_plugins(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0))
+        .add_plugins(RapierDebugRenderPlugin::default())
+        .add_plugins(CustomCameraPlugin)
+        .add_message::<CollisionEvent>()
+        .add_systems(Startup, (setup_ground, spawn_player, spawn_random_coin))
+        .add_systems(Update, (player_movement, detect_collisions, handle_coin_pickup))
         .run();
 }
 
-fn setup_graphics(mut commands: Commands) {
-    // Add a camera so we can see the debug-render.
-    commands.spawn((
-        Camera3d::default(),
-        Transform::from_xyz(-3.0, 3.0, 10.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
-
-    commands.spawn((
-        DirectionalLight {
-            illuminance: 10000.0,
-            shadows_enabled: true,
-            ..default()
-        },
-        Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
-
+fn setup_ground(mut commands: Commands) {
+    // Chão - largura baseada na tela
+    commands
+        .spawn(Collider::cuboid(SCREEN_WIDTH * 0.78, 50.0))
+        .insert(Transform::from_xyz(0.0, -SCREEN_HEIGHT * 0.25, 0.0))
+        .insert(RigidBody::Fixed);
 }
 
-fn setup_physics(mut commands: Commands,
-                 mut meshes: ResMut<Assets<Mesh>>,
-                 mut materials: ResMut<Assets<StandardMaterial>>) {
-    // Create the ground
-    commands.spawn((
-                Mesh3d(meshes.add(Cuboid::new(200.0, 0.2, 200.0))),
-                MeshMaterial3d(materials.add(StandardMaterial {
-                    base_color: Color::srgb(0.3, 0.5, 0.3),
-                    ..default()
-                })),
-                Collider::cuboid(100.0, 0.1, 100.0),
-                Transform::from_xyz(0.0, -2.0, 0.0),
-            ));
-
-    // Esferas
-    create_sphere(
-        &mut commands,
-        &mut meshes,
-        &mut materials,
-        Vec3::new(0.0, 4.0, 0.0),
-        0.5,
-        0.7,
-        None,
-        None,
-        false,
-        Color::srgb(1.0, 0.2, 0.2),
-    );
-
-    create_sphere(
-        &mut commands,
-        &mut meshes,
-        &mut materials,
-        Vec3::new(2.0, 6.0, 0.0),
-        0.5,
-        0.7,
-        Some(Velocity {
-            linvel: Vec3::new(-2.0, 2.0, 0.0),
-            angvel: Vec3::new(0.2, 0.0, 0.0),
-        }),
-        Some(0.5),
-        true,
-        Color::srgb(0.2, 0.2, 1.0),
-    );
+fn spawn_player(mut commands:Commands){
+    commands
+        .spawn(RigidBody::Dynamic)
+        .insert(Collider::ball(20.0))
+        .insert(Restitution::coefficient(0.7))
+        .insert(Transform::from_xyz(0.0, SCREEN_HEIGHT * 0.375, 0.0))
+        .insert(Velocity::zero())
+        .insert(Player);
 }
 
-
-fn create_sphere(
-    commands: &mut Commands,
-    meshes: &mut ResMut<Assets<Mesh>>,
-    materials: &mut ResMut<Assets<StandardMaterial>>,
-    position: Vec3,
-    radius: f32,
-    restitution: f32,
-    velocity: Option<Velocity>,
-    gravity_scale: Option<f32>,
-    enabled_ccd: bool,
-    color: Color,
+fn player_movement(
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut query: Query<(&mut Velocity, &mut Transform), With<Player>>,
 ) {
-    let mut entity = commands.spawn((
-        RigidBody::Dynamic,
-        Collider::ball(radius),
-        Restitution::coefficient(restitution),
-        Transform::from_translation(position),
+    for (mut vel, mut transform) in &mut query {
+        if keyboard_input.pressed(KeyCode::KeyA){
+            vel.linvel.x = -300.0;
+        } else if keyboard_input.pressed(KeyCode::KeyD) {
+            vel.linvel.x = 300.0;
+        } else {
+            vel.linvel.x = 0.0;
+        }
 
-        Mesh3d(meshes.add(Sphere::new(radius))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: color,
-            ..default()
-        })),
-    ));
-    
-    if let Some(vel) = velocity {
-        entity.insert(vel);
-    }
-    
-    if let Some(scale) = gravity_scale {
-        entity.insert(GravityScale(scale));
-    }
+        if keyboard_input.just_pressed(KeyCode::KeyR) {
+            transform.translation = Vec3::new(0.0, SCREEN_HEIGHT * 0.375, 0.0);
+            vel.linvel = Vec2::ZERO;
+        }
 
-    if enabled_ccd {
-        entity.insert(Ccd::enabled());
+        if keyboard_input.just_pressed(KeyCode::Space){
+            vel.linvel.y = 400.0;
+        }
     }
-    // Desabilita sleeping por padrão para objetos dinâmicos
-    entity.insert(Sleeping::disabled());
+}
+
+fn detect_collisions(mut collision_events: MessageReader<CollisionEvent>) {
+    for collision_event in collision_events.read() {
+        println!("Entidades colidiram : {:?}", collision_event);
+    }
 }
 
 
-fn print_ball_altitude(positions: Query<&Transform, With<RigidBody>>) {
-    for transform in positions.iter() {
-        println!("Ball altitude: {}", transform.translation.y);
+
+fn spawn_coin(mut commands: Commands, x: f32, y: f32) {
+    commands
+        .spawn(Collider::ball(10.0))
+        .insert(Sensor)
+        .insert(ActiveEvents::COLLISION_EVENTS)
+        .insert(Transform::from_xyz(x, y, 0.0));
+}
+
+fn handle_coin_pickup(
+    mut collision_events: MessageReader<CollisionEvent>,
+    query_coins: Query<Entity, With<Sensor>>,
+    mut commands: Commands,
+) {
+    for event in collision_events.read() {
+        if let CollisionEvent::Started(e1, e2, _) = event {
+            for coin in query_coins.iter() {
+                if *e1 == coin || *e2 == coin {
+                    println!("Moeda coletada!");
+                    commands.entity(coin).despawn();
+                }
+            }
+        }
     }
+}
+
+fn spawn_random_coin(commands: Commands) {
+    let mut rng = rand::rng();
+    let x = rng.random_range(-SCREEN_WIDTH * 0.3..SCREEN_WIDTH * 0.3);
+    let y = rng.random_range(-SCREEN_HEIGHT * 0.125..SCREEN_HEIGHT * 0.375);
+    spawn_coin(commands, x, y);
 }
