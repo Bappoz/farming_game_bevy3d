@@ -35,7 +35,7 @@ fn orbit_camera_system(
     mut motion: MessageReader<MouseMotion>,
     mut scroll: MessageReader<MouseWheel>,
     buttons: Res<ButtonInput<MouseButton>>,
-    mut camera: Single<(&mut Transform, &mut OrbitCamera)>,
+    camera: Single<(&mut Transform, &mut OrbitCamera)>,
 ) {
     let (mut transform, mut orbit) = camera.into_inner();
 
